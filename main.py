@@ -120,27 +120,50 @@ async def get_candles(symbol: str, interval: str = "1h", limit: int = 100):
         interval_ms = interval_map.get(interval, 3600000)
         start_time = end_time - (interval_ms * limit)
         
-        candles = info.candles_snapshot(
-            coin=symbol,
-            interval=interval,
-            startTime=start_time,
-            endTime=end_time
-        )
+        try:
+            # Try using SDK method first
+            candles = info.candles_snapshot(
+                coin=symbol,
+                interval=interval,
+                startTime=start_time,
+                endTime=end_time
+            )
+        except:
+            # Fallback to direct API call if SDK fails
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.post(
+                    "https://api.hyperliquid.xyz/info",
+                    json={
+                        "type": "candleSnapshot",
+                        "req": {
+                            "coin": symbol,
+                            "interval": interval,
+                            "startTime": start_time,
+                            "endTime": end_time
+                        }
+                    }
+                )
+                if response.status_code == 200:
+                    candles = response.json()
+                else:
+                    candles = []
         
         transformed = []
         for candle in candles:
             transformed.append({
-                "time": candle["t"],
-                "open": float(candle["o"]),
-                "high": float(candle["h"]),
-                "low": float(candle["l"]),
-                "close": float(candle["c"]),
-                "volume": float(candle["v"])
+                "time": candle.get("t", 0),
+                "open": float(candle.get("o", 0)),
+                "high": float(candle.get("h", 0)),
+                "low": float(candle.get("l", 0)),
+                "close": float(candle.get("c", 0)),
+                "volume": float(candle.get("v", 0))
             })
         
         return transformed
         
     except Exception as e:
+        print(f"Candles error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error fetching candles: {str(e)}")
 
 @app.post("/quote")
@@ -250,6 +273,40 @@ async def get_user_state(address: str):
         return state
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching user state: {str(e)}")
+
+@app.get("/test/candles/{symbol}")
+async def test_candles(symbol: str):
+    """Test endpoint to check candle data directly"""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            end_time = int(time.time() * 1000)
+            start_time = end_time - (3600000 * 24)  # Last 24 hours
+            
+            response = await client.post(
+                "https://api.hyperliquid.xyz/info",
+                json={
+                    "type": "candleSnapshot",
+                    "req": {
+                        "coin": symbol,
+                        "interval": "1h",
+                        "startTime": start_time,
+                        "endTime": end_time
+                    }
+                }
+            )
+            
+            return {
+                "status_code": response.status_code,
+                "data": response.json() if response.status_code == 200 else None,
+                "error": None if response.status_code == 200 else response.text
+            }
+    except Exception as e:
+        return {
+            "status_code": 500,
+            "data": None,
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     import uvicorn
